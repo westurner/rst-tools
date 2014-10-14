@@ -39,6 +39,7 @@ setup(
     entry_points="""
     [console_scripts]
     rst-shift = rst_tools.rst_shift:main
+    rst-slideoutline = rst_tools.rst_slideoutline:main
     """,
     keywords='ReStructuredText',
     classifiers=[
