@@ -36,6 +36,10 @@ setup(
     install_requires=requirements,
     license="BSD",
     zip_safe=False,
+    entry_points="""
+    [console_scripts]
+    rst-shift = rst_tools.rst_shift:main
+    """,
     keywords='ReStructuredText',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
