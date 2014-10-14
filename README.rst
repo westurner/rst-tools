@@ -15,7 +15,8 @@ rst-tools
 Tools for working with ReStructuredText
 
 * Free software: BSD license
-* Documentation: https://rst-tools.readthedocs.org.
+
+.. * Documentation: https://rst-tools.readthedocs.org.
 
 Features
 --------
