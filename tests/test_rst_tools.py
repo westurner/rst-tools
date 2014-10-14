@@ -2,18 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-test_rst-tools
+test_rst_tools
 ----------------------------------
 
-Tests for `rst-tools` module.
+Tests for `rst_tools` module.
 """
 
 import unittest
 
-from rst-tools import rst-tools
+from rst_tools import rst_tools
 
 
-class TestRst-tools(unittest.TestCase):
+class TestRst_tools(unittest.TestCase):
 
     def setUp(self):
         pass

@@ -31,12 +31,12 @@ setup(
         'rst-tools',
     ],
     package_dir={'rst-tools':
-                 'rst-tools'},
+                 'rst_tools'},
     include_package_data=True,
     install_requires=requirements,
     license="BSD",
     zip_safe=False,
-    keywords='rst-tools',
+    keywords='ReStructuredText',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
