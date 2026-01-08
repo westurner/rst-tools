@@ -115,21 +115,21 @@ def find_preceding_directives(text, start_index):
         # Find start of the line ending at idx (meaning char at idx-1 is end of that line, likely \n)
         # Scan back for previous newline
         prev_newline = text.rfind('\n', 0, idx - 1 if idx > 0 and text[idx-1] == '\n' else idx)
-        
+
         line_start = prev_newline + 1
         line_content = text[line_start:idx]
-        
+
         stripped = line_content.strip()
-        
+
         # Check if line is empty or a target directive
         if not stripped:
             idx = line_start
             continue
-            
+
         if stripped.startswith('.. index::') or (stripped.startswith('.. _') and stripped.strip().endswith(':')):
              idx = line_start
              continue
-             
+
         # Stop if we hit something else
         break
     return idx
@@ -157,14 +157,14 @@ def rst_shift(input_file, shiftby, shift_title=True, add_index=False, add_refere
     if hasattr(input_file, 'read'):
          lines = input_file.read()
     else:
-         lines = str(input_file) # fallback? existing code used open? assume read() works if passed as file. 
+         lines = str(input_file) # fallback? existing code used open? assume read() works if passed as file.
          # The existing code did `f = input_file; lines = f.read()` but main passes arg directly?
          # If existing tests pass StringIO, then read() exists.
          # If older main used filename string, it would fail `f.read()` unless `f` is file.
          # I'll rely on `read()` being available or `input_file` being content string if not?
          # No, existing code: `lines = f.read()` implies f is file-like.
          pass
-    
+
     # Check if lines is bytes (if opened 'rb'?) -> assume string.
 
     parser = RstParser(lines)
@@ -226,7 +226,7 @@ def rst_shift(input_file, shiftby, shift_title=True, add_index=False, add_refere
              p_start = find_preceding_directives(lines, start)
              if p_start < start:
                  replace_start = p_start
-             
+
              # Extract title string
              if depth == 0:
                  # text: Overline\nTitle\nUnderline
@@ -240,12 +240,12 @@ def rst_shift(input_file, shiftby, shift_title=True, add_index=False, add_refere
              directives = []
              if add_index:
                  directives.append(f".. index:: {title_str}")
-             
+
              if add_reference:
                  # Slugify: lowercase, replace non-alphanumeric with hyphens
                  slug = re.sub(r'[\W_]+', '-', title_str.lower()).strip('-')
                  new_ref = f".. _{slug}:"
-                 
+
                  existing_refs = []
                  if preserve_references and replace_start < start:
                      # Parse existing block for references
@@ -258,9 +258,9 @@ def rst_shift(input_file, shiftby, shift_title=True, add_index=False, add_refere
 
                  if new_ref not in existing_refs:
                      existing_refs.append(new_ref)
-                 
+
                  directives.extend(existing_refs)
-             
+
              if directives:
                  prefix = '\n'.join(directives) + '\n\n'
                  if not no_leading_newlines and replace_start > 0:
@@ -467,7 +467,7 @@ Multi Title
         # Default behavior: preserve_references=True
         input_ = StringIO(input_str)
         output = rst_shift(input_, 0, add_index=True, add_reference=True)
-        
+
         # New "slug" ref should be _multi-title:
         # Expected:
         # .. index:: Multi Title
@@ -477,12 +477,12 @@ Multi Title
         #
         # Multi Title
         # ===========
-        
+
         self.assertIn(".. index:: Multi Title", output)
         self.assertIn(".. _multi-title:", output)
         self.assertIn(".. _alias1:", output)
         self.assertIn(".. _alias2:", output)
-        
+
         # Check that old '.. _multi:' (if not same as new one) is also preserved?
         # Yes, logic preserves all valid refs found in the block.
         self.assertIn(".. _multi:", output)
@@ -509,7 +509,7 @@ Title
         input_ = StringIO(input_str)
         # We rely on preserve_references=False to clean up old refs
         output = rst_shift(input_, 0, add_index=True, add_reference=True, preserve_references=False)
-        
+
         expected = """
 .. index:: Title
 .. _title:
@@ -523,7 +523,7 @@ Title
         # If input starts with newline, p_start might range.
         # The output logic adds '\n\n' after directives.
         # So: .. index:: Title\n.. _title:\n\nTitle\n=====\n
-        
+
         self.assertIn(".. index:: Title", output)
         self.assertIn(".. _title:", output)
         self.assertNotIn(".. index:: Old", output)
@@ -541,16 +541,16 @@ class Test_RstParser(unittest.TestCase):
         # Heading 1 '=' -> 1
         # Heading 1.1 '-' -> 2
         # Heading 1.1.1 '~' -> 3
-        
-        # '==' is stored as '==' for title? 
+
+        # '==' is stored as '==' for title?
         # In parser: underline_char = overline[0]*2
-        self.assertEqual(parser.headings['=='], 0) 
+        self.assertEqual(parser.headings['=='], 0)
         self.assertEqual(parser.headings['='], 1)
         self.assertEqual(parser.headings['-'], 2)
         self.assertEqual(parser.headings['~'], 3)
-        
+
         # Heading 2 '=' -> reused depth 1.
-        
+
     def test_parse_no_title(self):
         input_ = """
 Heading 1
@@ -709,13 +709,13 @@ def main():
     if not (opts.input_file or opts.shiftby == 0):
          # If input_file is missing and shiftby != 0
          pass
-    
+
     input_stream = None
     if opts.input_file == "-":
         input_stream = sys.stdin
     elif opts.input_file:
         input_stream = open(opts.input_file, "r+")
-    
+
     if input_stream:
         output = rst_shift(
             input_stream,
@@ -725,7 +725,7 @@ def main():
             no_leading_newlines=opts.no_leading_newlines,
             preserve_references=opts.preserve_references
         )
-        
+
         if opts.output_file is sys.stdout:
              opts.output_file.write(output)
         else:
