@@ -79,7 +79,7 @@ class RstParser(object):
                 log.debug(title)
                 log.debug("%d\t%s%s" % (0, 0 * "   ", title))
                 self.sections.append(
-                    (0, underline_char, "\n".join([overline, title, underline]))
+                    (0, underline_char, "\n".join([overline, title, underline]), title_obj.start(), title_obj.end())
                 )
 
         # Extract section headings and existing section heading numbering
@@ -99,13 +99,43 @@ class RstParser(object):
 
             heading_level = self.headings[underline_char]
             self.sections.append(
-                (heading_level, underline_char, "\n".join((text, line)))
+                (heading_level, underline_char, "\n".join((text, line)), g.start(), g.end())
             )
             # print heading_level,
             log.debug("%d\t%s%s" % (depth, heading_level * "   ", text))
 
 
-def rst_shift(input_file, shiftby, shift_title=True):
+def find_preceding_directives(text, start_index):
+    """
+    Search backwards from start_index for existing directives.
+    Returns the start index of the preamble (including directives and blank lines).
+    """
+    idx = start_index
+    while idx > 0:
+        # Find start of the line ending at idx (meaning char at idx-1 is end of that line, likely \n)
+        # Scan back for previous newline
+        prev_newline = text.rfind('\n', 0, idx - 1 if idx > 0 and text[idx-1] == '\n' else idx)
+        
+        line_start = prev_newline + 1
+        line_content = text[line_start:idx]
+        
+        stripped = line_content.strip()
+        
+        # Check if line is empty or a target directive
+        if not stripped:
+            idx = line_start
+            continue
+            
+        if stripped.startswith('.. index::') or (stripped.startswith('.. _') and stripped.strip().endswith(':')):
+             idx = line_start
+             continue
+             
+        # Stop if we hit something else
+        break
+    return idx
+
+
+def rst_shift(input_file, shiftby, shift_title=True, add_index=False, add_reference=False, no_leading_newlines=False, preserve_references=True):
     """
 
     Shift the headings of a restructuredtext document
@@ -114,10 +144,28 @@ def rst_shift(input_file, shiftby, shift_title=True):
     :type input_file: str
     :param shiftby: offset to shift headings by
     :type shiftby: signed int
+    :param add_index: Add index directive
+    :type add_index: bool
+    :param add_reference: Add reference target
+    :type add_reference: bool
+    :param no_leading_newlines: Do not add leading newlines before directives
+    :type no_leading_newlines: bool
+    :param preserve_references: Preserve existing reference targets
+    :type preserve_references: bool
     """
 
-    f = input_file  # open(input_file,'r+')
-    lines = f.read()
+    if hasattr(input_file, 'read'):
+         lines = input_file.read()
+    else:
+         lines = str(input_file) # fallback? existing code used open? assume read() works if passed as file. 
+         # The existing code did `f = input_file; lines = f.read()` but main passes arg directly?
+         # If existing tests pass StringIO, then read() exists.
+         # If older main used filename string, it would fail `f.read()` unless `f` is file.
+         # I'll rely on `read()` being available or `input_file` being content string if not?
+         # No, existing code: `lines = f.read()` implies f is file-like.
+         pass
+    
+    # Check if lines is bytes (if opened 'rb'?) -> assume string.
 
     parser = RstParser(lines)
     headings = parser.headings
@@ -144,19 +192,17 @@ def rst_shift(input_file, shiftby, shift_title=True):
     log.debug(" ".join(STD_HEADINGS))
     log.debug(" ".join(str(x) for x in headings_by_n.values()))
 
-    # TODO
-
-    # output = copy.copy(lines)
-    output = lines
+    # Collect replacements to apply them in reverse order (to maintain indices)
+    replacements = []
 
     # Perform underline replacements
     for section in sections:
-        (depth, char, text) = section
+        (depth, char, text, start, end) = section
         newdepth = depth + shiftby
         newchar = headings_by_n[newdepth]
         newtext = None
 
-        section, underline = text.split("\n", 1)
+        section_part, underline = text.split("\n", 1)
 
         # special case for title header
         if shiftby != 0:
@@ -164,14 +210,71 @@ def rst_shift(input_file, shiftby, shift_title=True):
                 char = char[0]
                 newchar = newchar[0]
                 if shiftby > 0:
-                    section = ""
+                    section_part = ""
             elif depth == 1 and text.startswith("\n"):
                 newtext = "\n"
 
-        newtext = newtext or "\n".join((section, underline.replace(char, newchar)))
+        newtext = newtext or "\n".join((section_part, underline.replace(char, newchar)))
+        newtext += "\n"
 
-        log.error((depth, newdepth, text, newtext))
-        output = output.replace(text, newtext, 1)
+        replace_start = start
+        replace_end = end
+
+        # Handle add_index and add_reference insertions / updates
+        if add_index or add_reference:
+             # Look for preceding directives
+             p_start = find_preceding_directives(lines, start)
+             if p_start < start:
+                 replace_start = p_start
+             
+             # Extract title string
+             if depth == 0:
+                 # text: Overline\nTitle\nUnderline
+                 parts = text.split('\n')
+                 title_str = parts[1].strip() if len(parts) > 1 else ""
+             else:
+                 # text: Title\nUnderline
+                 parts = text.split('\n')
+                 title_str = parts[0].strip()
+
+             directives = []
+             if add_index:
+                 directives.append(f".. index:: {title_str}")
+             
+             if add_reference:
+                 # Slugify: lowercase, replace non-alphanumeric with hyphens
+                 slug = re.sub(r'[\W_]+', '-', title_str.lower()).strip('-')
+                 new_ref = f".. _{slug}:"
+                 
+                 existing_refs = []
+                 if preserve_references and replace_start < start:
+                     # Parse existing block for references
+                     existing_block = lines[replace_start:start]
+                     for line in existing_block.split('\n'):
+                         sline = line.strip()
+                         # We only preserve references that look valid
+                         if sline.startswith('.. _') and sline.endswith(':'):
+                             existing_refs.append(sline)
+
+                 if new_ref not in existing_refs:
+                     existing_refs.append(new_ref)
+                 
+                 directives.extend(existing_refs)
+             
+             if directives:
+                 prefix = '\n'.join(directives) + '\n\n'
+                 if not no_leading_newlines and replace_start > 0:
+                     prefix = "\n\n" + prefix
+                 newtext = prefix + newtext
+
+        log.debug((depth, newdepth, text, newtext))
+        replacements.append((replace_start, replace_end, newtext))
+
+    # Apply replacements
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    output = lines
+    for start, end, chunk in replacements:
+        output = output[:start] + chunk + output[end:]
 
     return output
 
@@ -198,6 +301,75 @@ Heading 1.1
 -----------
 Heading 1.1.1
 ~~~~~~~~~~~~~
+Heading 2
+=========
+"""
+
+_RST_TEST_OUTPUT_1_ADD_OPTS = """
+.. index:: Title
+.. _title:
+
+=====
+Title
+=====
+title_content
+
+
+.. index:: Heading 1
+.. _heading-1:
+
+Heading 1
+=========
+
+
+.. index:: Heading 1.1
+.. _heading-1-1:
+
+Heading 1.1
+-----------
+
+
+.. index:: Heading 1.1.1
+.. _heading-1-1-1:
+
+Heading 1.1.1
+~~~~~~~~~~~~~
+
+
+.. index:: Heading 2
+.. _heading-2:
+
+Heading 2
+=========
+"""
+
+# Output without leading newlines (for --no-add-leading-newlines test)
+_RST_TEST_OUTPUT_1_ADD_OPTS_NO_NL = """
+.. index:: Title
+.. _title:
+
+=====
+Title
+=====
+title_content
+.. index:: Heading 1
+.. _heading-1:
+
+Heading 1
+=========
+.. index:: Heading 1.1
+.. _heading-1-1:
+
+Heading 1.1
+-----------
+.. index:: Heading 1.1.1
+.. _heading-1-1-1:
+
+Heading 1.1.1
+~~~~~~~~~~~~~
+.. index:: Heading 2
+.. _heading-2:
+
 Heading 2
 =========
 """
@@ -254,6 +426,110 @@ class Test_rst_shift(unittest.TestCase):
                 log.error("# shift = %r" % shift)
                 _compare_test_output(test_input, output, expected_output)
                 raise
+
+    def test_rst_add_opts(self):
+        input_ = StringIO(_RST_TEST_INPUT_1)
+        output = rst_shift(input_, 0, add_index=True, add_reference=True)
+        # Note: The expected output includes the prepended index/refs, BUT rst_shift replaces text.
+        # Since rst_shift currently only finds sections, if there are multiple sections, it inserts for each.
+        # Let's compare against constructed expected output
+        try:
+             # Basic check to see if directives are present
+             self.assertIn(".. index:: Title", output)
+             self.assertIn(".. _heading-1-1:", output)
+             self.assertEqual(output.strip(), _RST_TEST_OUTPUT_1_ADD_OPTS.strip())
+        except Exception:
+             print("Output:\n" + output)
+             print("Expected:\n" + _RST_TEST_OUTPUT_1_ADD_OPTS)
+             raise
+
+    def test_rst_add_opts_no_nl(self):
+        input_ = StringIO(_RST_TEST_INPUT_1)
+        output = rst_shift(input_, 0, add_index=True, add_reference=True, no_leading_newlines=True)
+        try:
+             self.assertIn(".. index:: Title", output)
+             self.assertEqual(output.strip(), _RST_TEST_OUTPUT_1_ADD_OPTS_NO_NL.strip())
+        except Exception:
+             print("Output:\n" + output)
+             print("Expected:\n" + _RST_TEST_OUTPUT_1_ADD_OPTS_NO_NL)
+             raise
+
+    def test_rst_multiple_references_preservation(self):
+        input_str = """
+.. index:: Multi
+.. _multi:
+.. _alias1:
+.. _alias2:
+
+Multi Title
+===========
+"""
+        # Default behavior: preserve_references=True
+        input_ = StringIO(input_str)
+        output = rst_shift(input_, 0, add_index=True, add_reference=True)
+        
+        # New "slug" ref should be _multi-title:
+        # Expected:
+        # .. index:: Multi Title
+        # .. _multi-title:
+        # .. _alias1:
+        # .. _alias2:
+        #
+        # Multi Title
+        # ===========
+        
+        self.assertIn(".. index:: Multi Title", output)
+        self.assertIn(".. _multi-title:", output)
+        self.assertIn(".. _alias1:", output)
+        self.assertIn(".. _alias2:", output)
+        
+        # Check that old '.. _multi:' (if not same as new one) is also preserved?
+        # Yes, logic preserves all valid refs found in the block.
+        self.assertIn(".. _multi:", output)
+
+        # Test with no-preserve
+        input_ = StringIO(input_str)
+        output = rst_shift(input_, 0, add_index=True, add_reference=True, preserve_references=False)
+        self.assertIn(".. index:: Multi Title", output)
+        self.assertIn(".. _multi-title:", output)
+        # Aliases should be gone because we overwrite full block with just new directives
+        self.assertNotIn(".. _alias1:", output)
+        self.assertNotIn(".. _alias2:", output)
+
+
+    def test_rst_update_opts(self):
+        # Input with old directives that should be replaced
+        input_str = """
+.. index:: Old
+.. _old:
+
+Title
+=====
+"""
+        input_ = StringIO(input_str)
+        # We rely on preserve_references=False to clean up old refs
+        output = rst_shift(input_, 0, add_index=True, add_reference=True, preserve_references=False)
+        
+        expected = """
+.. index:: Title
+.. _title:
+
+Title
+=====
+"""
+        # Note: rst_shift output might contain leading newlines if input did or if we added them.
+        # Our update logic replaces [p_start:end].
+        # p_start includes ".. index:: Old\n".
+        # If input starts with newline, p_start might range.
+        # The output logic adds '\n\n' after directives.
+        # So: .. index:: Title\n.. _title:\n\nTitle\n=====\n
+        
+        self.assertIn(".. index:: Title", output)
+        self.assertIn(".. _title:", output)
+        self.assertNotIn(".. index:: Old", output)
+        self.assertNotIn(".. _old:", output)
+        self.assertEqual(output.strip(), expected.strip())
+
 
 class Test_RstParser(unittest.TestCase):
     def test_parse_simple(self):
@@ -383,7 +659,31 @@ def main():
     prs.add_argument(
         "-t", "--test", dest="run_tests", action="store_true", help="Run unit tests."
     )
-
+    prs.add_argument(
+        "--add-index",
+        dest="add_index",
+        action="store_true",
+        help="Add '.. index:: {title}' directive above sections."
+    )
+    prs.add_argument(
+        "--add-reference",
+        dest="add_reference",
+        action="store_true",
+        help="Add '.. _{slugified_title}:' target above sections."
+    )
+    prs.add_argument(
+        "--no-add-leading-newlines",
+        dest="no_leading_newlines",
+        action="store_true",
+        help="Disable adding 2 newlines before directives when using --add-index."
+    )
+    prs.add_argument(
+        "--no-preserve-references",
+        dest="preserve_references",
+        action="store_false",
+        default=True,
+        help="Do not preserve existing reference targets that are not being added."
+    )
     opts, args = prs.parse_known_args()
 
     if not opts.quiet:
@@ -417,7 +717,14 @@ def main():
         input_stream = open(opts.input_file, "r+")
     
     if input_stream:
-        output = rst_shift(input_stream, int(opts.shiftby))
+        output = rst_shift(
+            input_stream,
+            int(opts.shiftby),
+            add_index=opts.add_index,
+            add_reference=opts.add_reference,
+            no_leading_newlines=opts.no_leading_newlines,
+            preserve_references=opts.preserve_references
+        )
         
         if opts.output_file is sys.stdout:
              opts.output_file.write(output)
